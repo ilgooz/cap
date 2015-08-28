@@ -42,8 +42,9 @@ func Open(addr string) (*Cap, error) {
 		return nil, err
 	}
 	cap := &Cap{
-		addr:    addr,
-		connReq: make(chan bool, 0),
+		addr:     addr,
+		connReq:  make(chan bool, 0),
+		waitConn: make(chan chan bool, 0),
 	}
 	go cap.connectLoop()
 	cap.connect()
@@ -56,58 +57,62 @@ func (c *Cap) connect() {
 
 func (c *Cap) connectLoop() {
 	var (
-		connect   bool
-		connected = make(chan bool, 0)
-		waitings  = make([]chan bool, 0)
+		connecting bool
+		connected  bool
+		connection = make(chan bool, 0)
+		waitings   = make([]chan bool, 0)
 	)
 
 	for {
 		select {
 		case <-c.connReq:
-			if !connect {
+			if connecting || connected {
 				continue
 			}
-			connect = false
+			connecting = true
 
 			go func() {
 				cn, err := amqp.Dial(c.addr)
 				if err != nil {
 					log.Infof("couldn't connect to server err: %s", err)
 					time.Sleep(ReconnectDelay)
+					connection <- false
+					return
 				}
 
 				go func() {
 					err := <-cn.NotifyClose(make(chan *amqp.Error, 0))
 					log.Infof("connection lost err: %s", err)
-					connected <- false
+					connection <- false
 				}()
-
-				connected <- true
-				log.Info("connected")
 
 				c.m.Lock()
 				c.conn = cn
 				c.m.Unlock()
+
+				connection <- true
+				log.Info("connected")
 			}()
 
-		case is := <-connected:
-			connect = !is
-			if connect {
-				c.connect()
-			} else {
-				c.m.Lock()
-				for _, f := range c.funcs {
-					f()
-				}
-				c.m.Unlock()
-				for _, reply := range waitings {
-					reply <- false
-				}
+		case connected = <-connection:
+			connecting = false
+			c.connect()
+			if connected {
+				go func() {
+					c.m.Lock()
+					for _, f := range c.funcs {
+						go f()
+					}
+					c.m.Unlock()
+					for _, reply := range waitings {
+						go func() { reply <- true }()
+					}
+				}()
 			}
 
 		case reply := <-c.waitConn:
-			if !connect {
-				reply <- true
+			if connected {
+				go func() { reply <- true }()
 			} else {
 				waitings = append(waitings, reply)
 			}
@@ -125,13 +130,12 @@ func (c *Cap) getConnReady() bool {
 // and anytime right after a connection made to server.
 // Call this func as many as you want to register multiple funcs
 func (c *Cap) Always(f func()) {
-	c.m.Lock()
-	defer c.m.Unlock()
-
 	if c.getConnReady() {
 		f()
 	} else {
+		c.m.Lock()
 		c.funcs = append(c.funcs, f)
+		c.m.Unlock()
 	}
 }
 
@@ -234,8 +238,8 @@ func (d *Delivery) Ack() {
 	d.Delivery.Ack(false)
 }
 
-func (d Delivery) Nack() {
-	d.Delivery.Nack(false, false)
+func (d Delivery) Nack(requeue bool) {
+	d.Delivery.Nack(false, requeue)
 }
 
 func (c *Channel) Qos(count int) error {
