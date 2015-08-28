@@ -1,5 +1,7 @@
 package cap
 
+//todo: cd style declare/bind
+
 import (
 	"errors"
 	"net"
@@ -120,11 +122,22 @@ type Channel struct {
 	connAddr net.Addr
 }
 
+// AlwaysChannel calls given func with a valid channel for the first time
+// and anytime after re-connection made to server
 func (c *Cap) AlwaysChannel(f func(*Channel)) {
-
+	ch, err := c.Channel()
+	if err != nil {
+		c.AlwaysChannel(f)
+		return
+	}
+	go func() {
+		<-ch.NotifyClose(make(chan *amqp.Error, 0))
+		c.AlwaysChannel(f)
+	}()
+	f(ch)
 }
 
-// Channel creates a channel for current connection
+// Channel creates a channel for current connection.
 // It waits before creating a channel if there is no valid connection to server
 func (c *Cap) Channel() (*Channel, error) {
 	c.getConnReady()
@@ -138,7 +151,7 @@ func (c *Cap) Channel() (*Channel, error) {
 	}, nil
 }
 
-// Same as the Channel() but gives a Tx channel
+// Same as the Channel() but gives a Tx channel instead
 func (c *Cap) TxChannel() (*Channel, error) {
 	ch, err := c.Channel()
 	if err != nil {
@@ -147,4 +160,14 @@ func (c *Cap) TxChannel() (*Channel, error) {
 	return ch, ch.Tx()
 }
 
-//add: cd style declare/bind
+func IsConnectionError(err error) bool {
+	amqpErr, ok := err.(*amqp.Error)
+	if !ok {
+		return false
+	}
+	switch amqpErr.Code {
+	case 302, 501, 504:
+		return true
+	}
+	return false
+}
