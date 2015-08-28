@@ -17,7 +17,8 @@ import (
 var ReconnectDelay = time.Second * 5
 
 var (
-	DifferentConnErr = errors.New("connection has been changed")
+	DifferentConnErr      = errors.New("connection has been changed")
+	connNotInitializedErr = errors.New("connection not initialized yet")
 )
 
 var log = logrus.New()
@@ -177,6 +178,10 @@ func (c *Cap) AlwaysChannel(f func(*Channel)) {
 func (c *Cap) Channel() (*Channel, error) {
 	c.m.Lock()
 	defer c.m.Unlock()
+
+	if c.conn == nil {
+		return nil, connNotInitializedErr
+	}
 
 	ch, err := c.conn.Channel()
 	if err != nil {
