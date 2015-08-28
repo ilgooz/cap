@@ -230,6 +230,10 @@ func (d *Delivery) CreateTxChannel() (*Channel, error) {
 	return d.ch.CreateTxChannel()
 }
 
+func (c *Channel) Qos(count int) error {
+	return c.Channel.Qos(count, 0, false)
+}
+
 func (ch *Channel) Publish(exchange, key string, msg interface{}) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
