@@ -134,9 +134,11 @@ func (c *Cap) Always(f func()) {
 	c.m.Lock()
 	c.funcs = append(c.funcs, f)
 	c.m.Unlock()
-	if c.getConnReady() {
-		f()
-	}
+	go func() {
+		if c.getConnReady() {
+			f()
+		}
+	}()
 }
 
 type Channel struct {
@@ -303,7 +305,7 @@ type Session struct {
 
 func (c *Cap) AlwaysApply(s *Session) {
 	c.Always(func() {
-		ch, err := c.AbsoluteChannel()
+		ch, err := c.Channel()
 		if err != nil {
 			return
 		}
