@@ -130,13 +130,15 @@ func (c *Cap) getConnReady() bool {
 // and anytime right after a connection made to server.
 // Call this func as many as you want to register multiple funcs
 func (c *Cap) Always(f func()) {
-	if c.getConnReady() {
-		f()
-	} else {
-		c.m.Lock()
-		c.funcs = append(c.funcs, f)
-		c.m.Unlock()
-	}
+	go func() {
+		if c.getConnReady() {
+			f()
+		} else {
+			c.m.Lock()
+			c.funcs = append(c.funcs, f)
+			c.m.Unlock()
+		}
+	}()
 }
 
 type Channel struct {
@@ -156,16 +158,18 @@ func (c *Cap) newChannel(ch *amqp.Channel) *Channel {
 // AlwaysChannel calls given func with a valid channel for the first time
 // and anytime after a re-connection made to server
 func (c *Cap) AlwaysChannel(f func(*Channel)) {
-	ch, err := c.AbsoluteChannel()
-	if err != nil {
-		c.AlwaysChannel(f)
-		return
-	}
 	go func() {
-		<-ch.NotifyClose(make(chan *amqp.Error, 0))
-		c.AlwaysChannel(f)
+		ch, err := c.AbsoluteChannel()
+		if err != nil {
+			c.AlwaysChannel(f)
+			return
+		}
+		go func() {
+			<-ch.NotifyClose(make(chan *amqp.Error, 0))
+			c.AlwaysChannel(f)
+		}()
+		f(ch)
 	}()
-	f(ch)
 }
 
 // Channel creates a channel on current connection.
