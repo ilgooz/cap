@@ -9,6 +9,7 @@ import (
 	"github.com/streadway/amqp"
 )
 
+// Reconnection deplay time
 var ReconnectDelay = time.Second * 5
 
 var log = logrus.New()
@@ -25,6 +26,8 @@ type Cap struct {
 	waitConn chan chan bool
 }
 
+// Open opens a connection to amqp server
+// and re-connects if the connection drops
 func Open(addr string) (*Cap, error) {
 	_, err := amqp.ParseURI(addr)
 	if err != nil {
