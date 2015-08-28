@@ -123,7 +123,7 @@ type Channel struct {
 }
 
 // AlwaysChannel calls given func with a valid channel for the first time
-// and anytime after re-connection made to server
+// and anytime after a re-connection made to server
 func (c *Cap) AlwaysChannel(f func(*Channel)) {
 	ch, err := c.Channel()
 	if err != nil {
@@ -137,8 +137,8 @@ func (c *Cap) AlwaysChannel(f func(*Channel)) {
 	f(ch)
 }
 
-// Channel creates a channel for current connection.
-// It waits before creating a channel if there is no valid connection to server
+// Channel creates a channel for the current connection.
+// It waits for a valid connection before creating a channel if there is not
 func (c *Cap) Channel() (*Channel, error) {
 	c.getConnReady()
 	ch, err := c.conn.Channel()
@@ -151,7 +151,7 @@ func (c *Cap) Channel() (*Channel, error) {
 	}, nil
 }
 
-// Same as the Channel() but gives a Tx channel instead
+// TxChannel creates a Channel with Channel() but in transactional mode
 func (c *Cap) TxChannel() (*Channel, error) {
 	ch, err := c.Channel()
 	if err != nil {
@@ -160,6 +160,7 @@ func (c *Cap) TxChannel() (*Channel, error) {
 	return ch, ch.Tx()
 }
 
+// IsConnectionError checks the given error if it is a connection error or not
 func IsConnectionError(err error) bool {
 	amqpErr, ok := err.(*amqp.Error)
 	if !ok {
