@@ -156,7 +156,7 @@ func (c *Cap) newChannel(ch *amqp.Channel) *Channel {
 // AlwaysChannel calls given func with a valid channel for the first time
 // and anytime after a re-connection made to server
 func (c *Cap) AlwaysChannel(f func(*Channel)) {
-	ch, err := c.CreateChannel()
+	ch, err := c.AbsoluteChannel()
 	if err != nil {
 		c.AlwaysChannel(f)
 		return
@@ -168,11 +168,9 @@ func (c *Cap) AlwaysChannel(f func(*Channel)) {
 	f(ch)
 }
 
-// CreateChannel creates a channel for the current connection.
-// It waits for a valid connection before creating a channel if there is not
-func (c *Cap) CreateChannel() (*Channel, error) {
-	c.getConnReady()
-
+// Channel creates a channel on current connection.
+// Returns error if the connection is not valid
+func (c *Cap) Channel() (*Channel, error) {
 	c.m.Lock()
 	defer c.m.Unlock()
 
@@ -184,35 +182,38 @@ func (c *Cap) CreateChannel() (*Channel, error) {
 	return c.newChannel(ch), nil
 }
 
-// CreateTxChannel creates a channel with Channel() but in transactional mode
-func (c *Cap) CreateTxChannel() (*Channel, error) {
-	ch, err := c.CreateChannel()
+// AbsoluteChannel creates a channel for the current connection.
+// It waits for a valid connection before creating a channel if there is not
+func (c *Cap) AbsoluteChannel() (*Channel, error) {
+	c.getConnReady()
+	return c.Channel()
+}
+
+// AbsoluteTxChannel creates a channel with AbsoluteChannel() but in transactional mode
+func (c *Cap) AbsoluteTxChannel() (*Channel, error) {
+	ch, err := c.AbsoluteChannel()
 	if err != nil {
 		return nil, err
 	}
 	return ch, ch.Tx()
 }
 
-// CreateChannel creates a channel from the same connection of the channel
+// Another creates a channel from the same connection of the channel
 // or returns an error if the connection is no longer valid
-func (ch *Channel) CreateChannel() (*Channel, error) {
+func (ch *Channel) AnotherChannel() (*Channel, error) {
 	ch.cap.m.Lock()
 	defer ch.cap.m.Unlock()
 
 	if ch.cap.conn.LocalAddr() == ch.connAddr {
-		chn, err := ch.cap.conn.Channel()
-		if err != nil {
-			return nil, err
-		}
-		return ch.cap.newChannel(chn), nil
+		return ch.cap.Channel()
 	}
 
 	return nil, DifferentConnErr
 }
 
-// CreateTxChannel creates a channel with Channel.Channel() but in transactional mode
-func (ch *Channel) CreateTxChannel() (*Channel, error) {
-	chn, err := ch.CreateChannel()
+// AnotherTxChannel creates a channel with Channel.AnotherChannel() but in transactional mode
+func (ch *Channel) AnotherTxChannel() (*Channel, error) {
+	chn, err := ch.AnotherChannel()
 	if err != nil {
 		return nil, err
 	}
@@ -224,14 +225,14 @@ type Delivery struct {
 	ch *Channel
 }
 
-// CreateChannel has same behavior as Channel.CreateChannel()
-func (d *Delivery) CreateChannel() (*Channel, error) {
-	return d.ch.CreateChannel()
+// AnotherChannel has same behavior as Channel.AnotherChannel()
+func (d *Delivery) Channel() (*Channel, error) {
+	return d.ch.AnotherChannel()
 }
 
-// CreateTxChannel has same behavior as Channel.CreateTxChannel()
-func (d *Delivery) CreateTxChannel() (*Channel, error) {
-	return d.ch.CreateTxChannel()
+// AnotherTxChannel has same behavior as Channel.AnotherTxChannel()
+func (d *Delivery) AnotherTxChannel() (*Channel, error) {
+	return d.ch.AnotherTxChannel()
 }
 
 func (d *Delivery) Ack() {
@@ -297,7 +298,7 @@ type Session struct {
 
 func (c *Cap) AlwaysApply(s *Session) {
 	c.Always(func() {
-		ch, err := c.CreateChannel()
+		ch, err := c.AbsoluteChannel()
 		if err != nil {
 			return
 		}
