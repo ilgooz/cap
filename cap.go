@@ -230,6 +230,14 @@ func (d *Delivery) CreateTxChannel() (*Channel, error) {
 	return d.ch.CreateTxChannel()
 }
 
+func (d *Delivery) Ack() {
+	d.Delivery.Ack(false)
+}
+
+func (d Delivery) Nack() {
+	d.Delivery.Nack(false, false)
+}
+
 func (c *Channel) Qos(count int) error {
 	return c.Channel.Qos(count, 0, false)
 }
@@ -262,7 +270,7 @@ func (ch *Channel) Consume(name string, handler interface{}) error {
 				msg := reflect.New(mType).Interface()
 				err := json.Unmarshal(d.Body, msg)
 				if err != nil {
-					log.Printf("xamqp err: %s", err)
+					log.Printf("cap err: %s", err)
 					continue
 				}
 				delivery := Delivery{
