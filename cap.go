@@ -106,7 +106,7 @@ func (c *Cap) connectLoop() {
 					}
 					c.m.Unlock()
 					for _, reply := range waitings {
-						go func() { reply <- true }()
+						go func() { reply <- false }()
 					}
 				}()
 			}
@@ -131,15 +131,12 @@ func (c *Cap) getConnReady() bool {
 // and anytime right after a connection made to server.
 // Call this func as many as you want to register multiple funcs
 func (c *Cap) Always(f func()) {
-	go func() {
-		if c.getConnReady() {
-			f()
-		} else {
-			c.m.Lock()
-			c.funcs = append(c.funcs, f)
-			c.m.Unlock()
-		}
-	}()
+	c.m.Lock()
+	c.funcs = append(c.funcs, f)
+	c.m.Unlock()
+	if c.getConnReady() {
+		f()
+	}
 }
 
 type Channel struct {
