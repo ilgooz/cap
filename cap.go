@@ -12,14 +12,13 @@ import (
 	"github.com/streadway/amqp"
 )
 
-// Reconnection deplay time
 var ReconnectDelay = time.Second * 5
-
-var log = logrus.New()
 
 var (
 	DifferentConnErr = errors.New("connection has been changed")
 )
+
+var log = logrus.New()
 
 type Cap struct {
 	addr string
@@ -155,12 +154,15 @@ func (c *Cap) AlwaysChannel(f func(*Channel)) {
 // It waits for a valid connection before creating a channel if there is not
 func (c *Cap) CreateChannel() (*Channel, error) {
 	c.getConnReady()
+
 	c.m.Lock()
 	defer c.m.Unlock()
+
 	ch, err := c.conn.Channel()
 	if err != nil {
 		return nil, err
 	}
+
 	return c.newChannel(ch), nil
 }
 
@@ -178,15 +180,16 @@ func (c *Cap) CreateTxChannel() (*Channel, error) {
 func (ch *Channel) CreateChannel() (*Channel, error) {
 	ch.cap.m.Lock()
 	defer ch.cap.m.Unlock()
+
 	if ch.cap.conn.LocalAddr() == ch.connAddr {
 		chn, err := ch.cap.conn.Channel()
 		if err != nil {
 			return nil, err
 		}
 		return ch.cap.newChannel(chn), nil
-	} else {
-		return nil, DifferentConnErr
 	}
+
+	return nil, DifferentConnErr
 }
 
 // CreateTxChannel creates a channel with Channel.Channel() but in transactional mode
