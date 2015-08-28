@@ -124,8 +124,27 @@ func (c *Cap) AlwaysChannel(f func(*Channel)) {
 
 }
 
+// Channel creates a channel for current connection
+// It waits before creating a channel if there is no valid connection to server
 func (c *Cap) Channel() (*Channel, error) {
+	c.getConnReady()
+	ch, err := c.conn.Channel()
+	if err != nil {
+		return nil, err
+	}
+	return &Channel{
+		Channel:  ch,
+		connAddr: c.conn.LocalAddr(),
+	}, nil
+}
 
+// Same as the Channel() but gives a Tx channel
+func (c *Cap) TxChannel() (*Channel, error) {
+	ch, err := c.Channel()
+	if err != nil {
+		return nil, err
+	}
+	return ch, ch.Tx()
 }
 
 //add: cd style declare/bind
