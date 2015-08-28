@@ -5,6 +5,7 @@ package cap
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"reflect"
 	"sync"
@@ -159,7 +160,7 @@ func (c *Cap) newChannel(ch *amqp.Channel) *Channel {
 // and anytime after a re-connection made to server
 func (c *Cap) AlwaysChannel(f func(*Channel)) {
 	go func() {
-		ch, err := c.AbsoluteChannel()
+		ch, err := c.Channel()
 		if err != nil {
 			c.AlwaysChannel(f)
 			return
@@ -194,6 +195,7 @@ func (c *Cap) Channel() (*Channel, error) {
 // It waits for a valid connection before creating a channel if there is not
 func (c *Cap) AbsoluteChannel() (*Channel, error) {
 	c.getConnReady()
+	fmt.Println(1)
 	return c.Channel()
 }
 
