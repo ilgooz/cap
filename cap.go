@@ -278,30 +278,9 @@ func (ch *Channel) Consume(name string, handler interface{}) error {
 }
 
 type Session struct {
-	Exchange struct {
-		Name       string
-		Type       string
-		Durable    bool
-		AutoDelete bool
-		Internal   bool
-		NoWait     bool
-		Args       amqp.Table
-	}
-	Queue struct {
-		Name       string
-		Durable    bool
-		AutoDelete bool
-		Exclusive  bool
-		NoWait     bool
-		Args       amqp.Table
-	}
-	QueueBind struct {
-		Name     string
-		Key      string
-		Exchange string
-		Nowait   bool
-		Args     amqp.Table
-	}
+	Exchange string
+	Name     string
+	Key      string
 }
 
 func (c *Cap) AlwaysApply(s *Session) {
@@ -313,36 +292,37 @@ func (c *Cap) AlwaysApply(s *Session) {
 		defer ch.Close()
 
 		if err := ch.ExchangeDeclare(
-			s.Exchange.Name,       // name of the exchange
-			s.Exchange.Type,       // type
-			s.Exchange.Durable,    // durable
-			s.Exchange.AutoDelete, // delete when complete
-			s.Exchange.Internal,   // internal
-			s.Exchange.NoWait,     // noWait
-			s.Exchange.Args,       // arguments
+			s.Exchange,   // name of the exchange
+			"fanout",     // type
+			true,         // durable
+			false,        // delete when complete
+			false,        // internal
+			false,        // noWait
+			amqp.Table{}, // arguments
 		); err != nil {
 			log.Error(err)
 			return
 		}
 
 		if _, err := ch.QueueDeclare(
-			s.Queue.Name,       // name of the queue
-			s.Queue.Durable,    // durable
-			s.Queue.AutoDelete, // delete when usused
-			s.Queue.Exclusive,  // exclusive
-			s.Queue.NoWait,     // noWait
-			s.Queue.Args,       // arguments
+			s.Name,       // name of the queue
+			true,         // durable
+			false,        // delete when usused
+			false,        // exclusive
+			false,        // noWait
+			amqp.Table{}, // arguments
+
 		); err != nil {
 			log.Error(err)
 			return
 		}
 
 		if err := ch.QueueBind(
-			s.QueueBind.Name,     // name of the queue
-			s.QueueBind.Key,      // bindingKey
-			s.QueueBind.Exchange, // sourceExchange
-			s.QueueBind.Nowait,   // noWait
-			s.QueueBind.Args,     // arguments
+			s.Name,       // name of the queue
+			s.Key,        // bindingKey
+			s.Exchange,   // sourceExchange
+			false,        // noWait
+			amqp.Table{}, // arguments
 		); err != nil {
 			log.Error(err)
 		}
