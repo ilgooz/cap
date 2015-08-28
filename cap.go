@@ -23,7 +23,7 @@ var (
 type Cap struct {
 	addr string
 
-	conn     *amqp.Connection
+	*amqp.Connection
 	connReq  chan bool
 	waitConn chan chan bool
 }
@@ -79,7 +79,7 @@ func (c *Cap) connectLoop() {
 				connected <- true
 				log.Info("connected")
 
-				c.conn = cn
+				c.Connection = cn
 			}()
 
 		case is := <-connected:
@@ -141,17 +141,17 @@ func (c *Cap) AlwaysChannel(f func(*Channel)) {
 // It waits for a valid connection before creating a channel if there is not
 func (c *Cap) Channel() (*Channel, error) {
 	c.getConnReady()
-	ch, err := c.conn.Channel()
+	ch, err := c.Connection.Channel()
 	if err != nil {
 		return nil, err
 	}
 	return &Channel{
 		Channel:  ch,
-		connAddr: c.conn.LocalAddr(),
+		connAddr: c.Connection.LocalAddr(),
 	}, nil
 }
 
-// TxChannel creates a Channel with Channel() but in transactional mode
+// TxChannel creates a channel with Channel() but in transactional mode
 func (c *Cap) TxChannel() (*Channel, error) {
 	ch, err := c.Channel()
 	if err != nil {
