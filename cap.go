@@ -3,8 +3,10 @@ package cap
 //todo: cd style declare/bind
 
 import (
+	"encoding/json"
 	"errors"
 	"net"
+	"reflect"
 	"sync"
 	"time"
 
@@ -27,6 +29,8 @@ type Cap struct {
 	connReq  chan bool
 	waitConn chan chan bool
 	m        sync.Mutex
+
+	funcs []func()
 }
 
 // Open opens a connection to amqp server with given addr
@@ -91,8 +95,13 @@ func (c *Cap) connectLoop() {
 			if connect {
 				c.connect()
 			} else {
+				c.m.Lock()
+				for _, f := range c.funcs {
+					f()
+				}
+				c.m.Unlock()
 				for _, reply := range waitings {
-					reply <- true
+					reply <- false
 				}
 			}
 
@@ -106,19 +115,24 @@ func (c *Cap) connectLoop() {
 	}
 }
 
-func (c *Cap) getConnReady() {
+func (c *Cap) getConnReady() bool {
 	wait := make(chan bool, 0)
 	c.waitConn <- wait
-	<-wait
+	return <-wait
 }
 
-func (c *Cap) Always(do func()) {
-	c.getConnReady()
-	//add: listen for die and loop
-}
+// Always calls given func immediately if the current connection is valid
+// and anytime right after a connection made to server.
+// Call this func as many as you want to register multiple funcs
+func (c *Cap) Always(f func()) {
+	c.m.Lock()
+	defer c.m.Unlock()
 
-func (c *Cap) RegisterSession() {
-
+	if c.getConnReady() {
+		f()
+	} else {
+		c.funcs = append(c.funcs, f)
+	}
 }
 
 type Channel struct {
@@ -214,6 +228,121 @@ func (d *Delivery) CreateChannel() (*Channel, error) {
 // CreateTxChannel has same behavior as Channel.CreateTxChannel()
 func (d *Delivery) CreateTxChannel() (*Channel, error) {
 	return d.ch.CreateTxChannel()
+}
+
+func (ch *Channel) Publish(exchange, key string, msg interface{}) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	m := amqp.Publishing{
+		Body: data,
+	}
+	return ch.Channel.Publish(exchange, key, false, false, m)
+}
+
+func (ch *Channel) Consume(name string, handler interface{}) error {
+	dc, err := ch.Channel.Consume(name, "", false, false, false, false, amqp.Table{})
+	if err != nil {
+		return err
+	}
+	v := reflect.ValueOf(handler)
+	mType := reflect.TypeOf(handler).In(0)
+	go func() {
+		for {
+			select {
+			case d, ok := <-dc:
+				if !ok {
+					return
+				}
+				msg := reflect.New(mType).Interface()
+				err := json.Unmarshal(d.Body, msg)
+				if err != nil {
+					log.Printf("xamqp err: %s", err)
+					continue
+				}
+				delivery := Delivery{
+					Delivery: &d,
+					ch:       ch,
+				}
+				in := []reflect.Value{reflect.ValueOf(msg).Elem(), reflect.ValueOf(delivery)}
+				go func() { v.Call(in) }()
+			}
+		}
+	}()
+	return nil
+}
+
+type Session struct {
+	Exchange struct {
+		Name       string
+		Type       string
+		Durable    bool
+		AutoDelete bool
+		Internal   bool
+		NoWait     bool
+		Args       amqp.Table
+	}
+	Queue struct {
+		Name       string
+		Durable    bool
+		AutoDelete bool
+		Exclusive  bool
+		NoWait     bool
+		Args       amqp.Table
+	}
+	QueueBind struct {
+		Name     string
+		Key      string
+		Exchange string
+		Nowait   bool
+		Args     amqp.Table
+	}
+}
+
+func (c *Cap) AlwaysApply(s *Session) {
+	c.Always(func() {
+		ch, err := c.CreateChannel()
+		if err != nil {
+			return
+		}
+		defer ch.Close()
+
+		if err := ch.ExchangeDeclare(
+			s.Exchange.Name,       // name of the exchange
+			s.Exchange.Type,       // type
+			s.Exchange.Durable,    // durable
+			s.Exchange.AutoDelete, // delete when complete
+			s.Exchange.Internal,   // internal
+			s.Exchange.NoWait,     // noWait
+			s.Exchange.Args,       // arguments
+		); err != nil {
+			log.Error(err)
+			return
+		}
+
+		if _, err := ch.QueueDeclare(
+			s.Queue.Name,       // name of the queue
+			s.Queue.Durable,    // durable
+			s.Queue.AutoDelete, // delete when usused
+			s.Queue.Exclusive,  // exclusive
+			s.Queue.NoWait,     // noWait
+			s.Queue.Args,       // arguments
+		); err != nil {
+			log.Error(err)
+			return
+		}
+
+		if err := ch.QueueBind(
+			s.QueueBind.Name,     // name of the queue
+			s.QueueBind.Key,      // bindingKey
+			s.QueueBind.Exchange, // sourceExchange
+			s.QueueBind.Nowait,   // noWait
+			s.QueueBind.Args,     // arguments
+		); err != nil {
+			log.Error(err)
+		}
+	})
 }
 
 // IsConnectionError checks the given error if it is a connection error or not
