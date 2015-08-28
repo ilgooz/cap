@@ -202,9 +202,8 @@ func (c *Cap) AbsoluteTxChannel() (*Channel, error) {
 // or returns an error if the connection is no longer valid
 func (ch *Channel) AnotherChannel() (*Channel, error) {
 	ch.cap.m.Lock()
-	defer ch.cap.m.Unlock()
-
 	if ch.cap.conn.LocalAddr() == ch.connAddr {
+		ch.cap.m.Unlock()
 		return ch.cap.Channel()
 	}
 
