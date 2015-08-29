@@ -5,10 +5,11 @@ package cap
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"reflect"
 	"time"
 
-	"github.com/Sirupsen/logrus"
+	"github.com/koding/logging"
 	"github.com/streadway/amqp"
 )
 
@@ -19,7 +20,7 @@ var (
 	ConnNotInitializedErr = errors.New("connection not initialized yet")
 )
 
-var log = logrus.New()
+var l = logging.NewLogger("cap")
 
 type Cap struct {
 	addr string
@@ -95,7 +96,7 @@ func (c *Cap) connectLoop() {
 			go func() {
 				cn, err := amqp.Dial(c.addr)
 				if err != nil {
-					log.Infof("couldn't connect to server err: %s", err)
+					l.Info("couldn't connect to server err: %s", err)
 					time.Sleep(ReconnectDelay)
 					connection <- nil
 					return
@@ -103,12 +104,12 @@ func (c *Cap) connectLoop() {
 
 				go func() {
 					err := <-cn.NotifyClose(make(chan *amqp.Error, 0))
-					log.Infof("connection lost err: %s", err)
+					l.Info("connection lost err: %s", err)
 					connection <- nil
 				}()
 
 				connection <- cn
-				log.Info("connected")
+				l.Info("connected")
 			}()
 
 		case cn := <-connection:
