@@ -136,19 +136,18 @@ func (c *Cap) connectLoop() {
 }
 
 func (c *Cap) AlwaysChannel(f func(ch *Channel) error) {
-	for {
-		ch, err := c.Channel(true)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		go func() {
-			<-ch.NotifyClose(make(chan *amqp.Error, 1))
-			c.AlwaysChannel(f)
-		}()
-		if err := f(ch); err != nil {
-			break
-		}
+	close := make(chan *amqp.Error, 1)
+	ch, err := c.Channel(true)
+	if err != nil {
+		c.AlwaysChannel(f)
+		log.Println(err)
+		return
+	}
+	ch.NotifyClose(close)
+	err = f(ch)
+	<-close
+	if err == nil {
+		c.AlwaysChannel(f)
 	}
 }
 
