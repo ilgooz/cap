@@ -5,10 +5,7 @@ package cap
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
-	"net"
 	"reflect"
-	"sync"
 	"time"
 
 	"github.com/Sirupsen/logrus"
@@ -19,7 +16,7 @@ var ReconnectDelay = time.Second * 5
 
 var (
 	DifferentConnErr      = errors.New("connection has been changed")
-	connNotInitializedErr = errors.New("connection not initialized yet")
+	ConnNotInitializedErr = errors.New("connection not initialized yet")
 )
 
 var log = logrus.New()
@@ -27,48 +24,72 @@ var log = logrus.New()
 type Cap struct {
 	addr string
 
-	conn     *amqp.Connection
-	connReq  chan bool
-	waitConn chan chan bool
-	m        sync.Mutex
-
-	funcs []func()
+	connectReq chan bool
+	getConnReq chan getConnReq
+	funcReq    chan func()
 }
 
-// Open opens a connection to amqp server with given addr
-// and re-connects if the connection drops.
-// Returns an error if the addr is invalid
+type Connection struct {
+	conn *amqp.Connection
+	cap  *Cap
+}
+
+func newConnection(c *amqp.Connection, cap *Cap) *Connection {
+	return &Connection{
+		conn: c,
+		cap:  cap,
+	}
+}
+
+func (c *Connection) Channel() (*Channel, error) {
+	ch, err := c.conn.Channel()
+	if err != nil {
+		return nil, err
+	}
+	return &Channel{
+		Channel: ch,
+		conn:    c,
+	}, nil
+}
+
+type getConnReq struct {
+	wait  bool
+	reply chan *Connection
+}
+
 func Open(addr string) (*Cap, error) {
 	_, err := amqp.ParseURI(addr)
 	if err != nil {
 		return nil, err
 	}
 	cap := &Cap{
-		addr:     addr,
-		connReq:  make(chan bool, 0),
-		waitConn: make(chan chan bool, 0),
+		addr:       addr,
+		connectReq: make(chan bool, 0),
+		getConnReq: make(chan getConnReq, 0),
+		funcReq:    make(chan func(), 0),
 	}
 	go cap.connectLoop()
-	cap.connect()
+	go cap.connect()
 	return cap, nil
 }
 
 func (c *Cap) connect() {
-	go func() { c.connReq <- true }()
+	go func() { c.connectReq <- true }()
 }
 
 func (c *Cap) connectLoop() {
 	var (
-		connecting bool
-		connected  bool
-		connection = make(chan bool, 0)
-		waitings   = make([]chan bool, 0)
+		connecting  bool
+		conn        *Connection
+		connection  = make(chan *amqp.Connection, 0)
+		getConnReqs = make([]chan *Connection, 0)
+		funcs       = make([]func(), 0)
 	)
 
 	for {
 		select {
-		case <-c.connReq:
-			if connecting || connected {
+		case <-c.connectReq:
+			if connecting {
 				continue
 			}
 			connecting = true
@@ -78,151 +99,99 @@ func (c *Cap) connectLoop() {
 				if err != nil {
 					log.Infof("couldn't connect to server err: %s", err)
 					time.Sleep(ReconnectDelay)
-					connection <- false
+					connection <- nil
 					return
 				}
 
 				go func() {
 					err := <-cn.NotifyClose(make(chan *amqp.Error, 0))
 					log.Infof("connection lost err: %s", err)
-					connection <- false
+					connection <- nil
 				}()
 
-				c.m.Lock()
-				c.conn = cn
-				c.m.Unlock()
-
-				connection <- true
+				connection <- cn
 				log.Info("connected")
 			}()
 
-		case connected = <-connection:
+		case cn := <-connection:
 			connecting = false
-			c.connect()
-			if connected {
-				go func() {
-					c.m.Lock()
-					for _, f := range c.funcs {
-						go f()
-					}
-					c.m.Unlock()
-					for _, reply := range waitings {
-						go func() { reply <- false }()
-					}
-				}()
+
+			if cn == nil {
+				c.connect()
+			} else {
+				conn = newConnection(cn, c)
+				for _, reply := range getConnReqs {
+					reply <- conn
+				}
+				for _, f := range funcs {
+					go f()
+				}
 			}
 
-		case reply := <-c.waitConn:
-			if connected {
-				go func() { reply <- true }()
+		case getConnReq := <-c.getConnReq:
+			if connecting && getConnReq.wait {
+				getConnReqs = append(getConnReqs, getConnReq.reply)
 			} else {
-				waitings = append(waitings, reply)
+				go func() { getConnReq.reply <- conn }()
 			}
+
+		case f := <-c.funcReq:
+			if !connecting && conn != nil {
+				go f()
+			}
+			funcs = append(funcs, f)
 		}
 	}
 }
 
-func (c *Cap) getConnReady() bool {
-	wait := make(chan bool, 0)
-	c.waitConn <- wait
-	return <-wait
+func (c *Cap) Use(f func()) {
+	c.funcReq <- f
 }
 
-// Always calls given func immediately if the current connection is valid
-// and anytime right after a connection made to server.
-// Call this func as many as you want to register multiple funcs
-func (c *Cap) Always(f func()) {
-	c.m.Lock()
-	c.funcs = append(c.funcs, f)
-	c.m.Unlock()
-	go func() {
-		if c.getConnReady() {
-			f()
-		}
-	}()
+func (c *Cap) getConnection(wait bool) *Connection {
+	req := getConnReq{
+		wait:  wait,
+		reply: make(chan *Connection),
+	}
+	c.getConnReq <- req
+	return <-req.reply
 }
 
 type Channel struct {
 	*amqp.Channel
-	connAddr net.Addr
-	cap      *Cap
+	conn *Connection
 }
 
-func (c *Cap) newChannel(ch *amqp.Channel) *Channel {
-	return &Channel{
-		Channel:  ch,
-		connAddr: c.conn.LocalAddr(),
-		cap:      c,
-	}
-}
+func (c *Cap) Channel(wait bool) (*Channel, error) {
+	conn := c.getConnection(wait)
 
-// AlwaysChannel calls given func with a valid channel for the first time
-// and anytime after a re-connection made to server
-func (c *Cap) AlwaysChannel(f func(*Channel)) {
-	go func() {
-		ch, err := c.Channel()
-		if err != nil {
-			c.AlwaysChannel(f)
-			return
-		}
-		go func() {
-			<-ch.NotifyClose(make(chan *amqp.Error, 0))
-			c.AlwaysChannel(f)
-		}()
-		f(ch)
-	}()
-}
-
-// Channel creates a channel on current connection.
-// Returns error if the connection is not valid
-func (c *Cap) Channel() (*Channel, error) {
-	c.m.Lock()
-	defer c.m.Unlock()
-
-	if c.conn == nil {
-		return nil, connNotInitializedErr
+	if conn == nil {
+		return nil, ConnNotInitializedErr
 	}
 
-	ch, err := c.conn.Channel()
-	if err != nil {
-		return nil, err
-	}
-
-	return c.newChannel(ch), nil
+	return conn.Channel()
 }
 
-// AbsoluteChannel creates a channel for the current connection.
-// It waits for a valid connection before creating a channel if there is not
-func (c *Cap) AbsoluteChannel() (*Channel, error) {
-	c.getConnReady()
-	fmt.Println(1)
-	return c.Channel()
-}
-
-// AbsoluteTxChannel creates a channel with AbsoluteChannel() but in transactional mode
-func (c *Cap) AbsoluteTxChannel() (*Channel, error) {
-	ch, err := c.AbsoluteChannel()
+func (c *Cap) TxChannel(wait bool) (*Channel, error) {
+	ch, err := c.Channel(wait)
 	if err != nil {
 		return nil, err
 	}
 	return ch, ch.Tx()
 }
 
-// Another creates a channel from the same connection of the channel
-// or returns an error if the connection is no longer valid
-func (ch *Channel) AnotherChannel() (*Channel, error) {
-	ch.cap.m.Lock()
-	if ch.cap.conn.LocalAddr() == ch.connAddr {
-		ch.cap.m.Unlock()
-		return ch.cap.Channel()
+func (ch *Channel) MakeChannel() (*Channel, error) {
+	conn := ch.conn.cap.getConnection(false)
+
+	if conn.conn.LocalAddr() == ch.conn.conn.LocalAddr() {
+		return conn.Channel()
 	}
 
 	return nil, DifferentConnErr
 }
 
-// AnotherTxChannel creates a channel with Channel.AnotherChannel() but in transactional mode
-func (ch *Channel) AnotherTxChannel() (*Channel, error) {
-	chn, err := ch.AnotherChannel()
+func (ch *Channel) MakeTxChannel() (*Channel, error) {
+	chn, err := ch.MakeChannel()
 	if err != nil {
 		return nil, err
 	}
@@ -234,14 +203,12 @@ type Delivery struct {
 	ch *Channel
 }
 
-// AnotherChannel has same behavior as Channel.AnotherChannel()
 func (d *Delivery) Channel() (*Channel, error) {
-	return d.ch.AnotherChannel()
+	return d.ch.MakeChannel()
 }
 
-// AnotherTxChannel has same behavior as Channel.AnotherTxChannel()
-func (d *Delivery) AnotherTxChannel() (*Channel, error) {
-	return d.ch.AnotherTxChannel()
+func (d *Delivery) MakeTxChannel() (*Channel, error) {
+	return d.ch.MakeTxChannel()
 }
 
 func (d *Delivery) Ack() {
@@ -305,9 +272,9 @@ type Session struct {
 	Key      string
 }
 
-func (c *Cap) AlwaysApply(s *Session) {
-	c.Always(func() {
-		ch, err := c.Channel()
+func (c *Cap) Apply(s *Session) {
+	for {
+		ch, err := c.Channel(true)
 		if err != nil {
 			return
 		}
@@ -322,8 +289,10 @@ func (c *Cap) AlwaysApply(s *Session) {
 			false,        // noWait
 			amqp.Table{}, // arguments
 		); err != nil {
-			log.Error(err)
-			return
+			if IsConnectionError(err) {
+				continue
+			}
+			log.Fatalln(err)
 		}
 
 		if _, err := ch.QueueDeclare(
@@ -335,8 +304,10 @@ func (c *Cap) AlwaysApply(s *Session) {
 			amqp.Table{}, // arguments
 
 		); err != nil {
-			log.Error(err)
-			return
+			if IsConnectionError(err) {
+				continue
+			}
+			log.Fatalln(err)
 		}
 
 		if err := ch.QueueBind(
@@ -346,12 +317,16 @@ func (c *Cap) AlwaysApply(s *Session) {
 			false,        // noWait
 			amqp.Table{}, // arguments
 		); err != nil {
-			log.Error(err)
+			if IsConnectionError(err) {
+				continue
+			}
+			log.Fatalln(err)
 		}
-	})
+
+		break
+	}
 }
 
-// IsConnectionError checks the given error if it is a connection error or not
 func IsConnectionError(err error) bool {
 	amqpErr, ok := err.(*amqp.Error)
 	if !ok {
