@@ -66,7 +66,6 @@ func Open(addr string) (*Cap, error) {
 		addr:       addr,
 		connectReq: make(chan bool, 0),
 		getConnReq: make(chan getConnReq, 0),
-		funcReq:    make(chan func(), 0),
 	}
 	go cap.connectLoop()
 	go cap.connect()
@@ -83,7 +82,6 @@ func (c *Cap) connectLoop() {
 		conn        *Connection
 		connection  = make(chan *amqp.Connection, 0)
 		getConnReqs = make([]chan *Connection, 0)
-		funcs       = make([]func(), 0)
 	)
 
 	for {
@@ -123,29 +121,33 @@ func (c *Cap) connectLoop() {
 				for _, reply := range getConnReqs {
 					reply <- conn
 				}
-				for _, f := range funcs {
-					go f()
-				}
 			}
 
 		case getConnReq := <-c.getConnReq:
 			if connecting && getConnReq.wait {
 				getConnReqs = append(getConnReqs, getConnReq.reply)
 			} else {
-				go func() { getConnReq.reply <- conn }()
+				getConnReq.reply <- conn
 			}
-
-		case f := <-c.funcReq:
-			if !connecting && conn != nil {
-				go f()
-			}
-			funcs = append(funcs, f)
 		}
 	}
 }
 
-func (c *Cap) Use(f func()) {
-	c.funcReq <- f
+func (c *Cap) AlwaysChannel(f func(ch *Channel) error) {
+	for {
+		ch, err := c.Channel(true)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		go func() {
+			<-ch.NotifyClose(make(chan *amqp.Error, 1))
+			c.AlwaysChannel(f)
+		}()
+		if err := f(ch); err != nil {
+			break
+		}
+	}
 }
 
 func (c *Cap) getConnection(wait bool) *Connection {
@@ -182,6 +184,10 @@ func (c *Cap) TxChannel(wait bool) (*Channel, error) {
 
 func (ch *Channel) MakeChannel() (*Channel, error) {
 	conn := ch.conn.cap.getConnection(false)
+
+	if conn == nil {
+		return nil, ConnNotInitializedErr
+	}
 
 	if conn.conn.LocalAddr() == ch.conn.conn.LocalAddr() {
 		return conn.Channel()
@@ -223,15 +229,17 @@ func (c *Channel) Qos(count int) error {
 	return c.Channel.Qos(count, 0, false)
 }
 
+//todo NotifyReturn
 func (ch *Channel) Publish(exchange, key string, msg interface{}) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
 	m := amqp.Publishing{
-		Body: data,
+		Body:         data,
+		DeliveryMode: 2,
 	}
-	return ch.Channel.Publish(exchange, key, false, false, m)
+	return ch.Channel.Publish(exchange, key, true, false, m)
 }
 
 func (ch *Channel) Consume(name string, handler interface{}) error {
