@@ -126,7 +126,7 @@ func (c *Cap) connectLoop() {
 			}
 
 		case getConnReq := <-c.getConnReq:
-			if connecting && getConnReq.wait {
+			if (connecting && getConnReq.wait) || conn == nil {
 				getConnReqs = append(getConnReqs, getConnReq.reply)
 			} else {
 				getConnReq.reply <- conn
@@ -145,7 +145,11 @@ func (c *Cap) AlwaysChannel(f func(ch *Channel) error) {
 	}
 	ch.NotifyClose(close)
 	err = f(ch)
-	<-close
+	amqpErr := <-close
+	if !IsConnectionError(amqpErr) {
+		l.Error(amqpErr.Error())
+		return
+	}
 	if err == nil {
 		c.AlwaysChannel(f)
 	}
