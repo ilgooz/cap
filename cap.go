@@ -122,6 +122,7 @@ func (c *Cap) connectLoop() {
 				for _, reply := range getConnReqs {
 					reply <- conn
 				}
+				getConnReqs = getConnReqs[:0]
 			}
 
 		case getConnReq := <-c.getConnReq:
