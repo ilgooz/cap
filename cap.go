@@ -289,7 +289,7 @@ func (c *Cap) Apply(s *Session) {
 	for {
 		ch, err := c.Channel(true)
 		if err != nil {
-			return
+			continue
 		}
 		defer ch.Close()
 
