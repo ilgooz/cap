@@ -289,6 +289,7 @@ func (c *Cap) Apply(s *Session) {
 	for {
 		ch, err := c.Channel(true)
 		if err != nil {
+			time.Sleep(time.Second * 3)
 			continue
 		}
 		defer ch.Close()
